@@ -418,15 +418,15 @@ A database only becomes useful if the project later introduces persistent transf
 ### MVP
 
 - [x] Local file server concept
-- [ ] Upload
-- [ ] Download
-- [ ] Delete
-- [ ] File listing
-- [ ] LAN access
-- [ ] QR connection
-- [ ] Real-time progress
-- [ ] Streaming
-- [ ] PIN protection
+- [x] Upload
+- [x] Download
+- [x] Delete
+- [x] File listing
+- [x] LAN access
+- [x] QR connection
+- [x] Real-time progress
+- [x] Streaming
+- [x] PIN protection
 
 ### Future
 
