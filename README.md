@@ -34,14 +34,22 @@ File appears on host
 - Download files from the host
 - Delete files
 - Drag-and-drop uploads
+- Folder uploads
 - Real-time transfer progress
 - Transfer speed display
 - File size display
+- Multi-file transfer queue with pause/resume
 - QR-based LAN connection
+- mDNS device discovery
 - Localhost mode
 - LAN mode
 - Optional PIN protection for LAN access
 - Large-file streaming
+- End-to-end encryption (AES-GCM)
+- Bandwidth limiting (upload/download)
+- Custom storage directory
+- Transfer history
+- File previews (image, video, audio, PDF, text)
 - Responsive UI
 
 ---
@@ -110,9 +118,13 @@ lan-drop/
 │   │   │   ├── DeviceInfo.tsx
 │   │   │   ├── FileCard.tsx
 │   │   │   ├── FileList.tsx
+│   │   │   ├── FilePreview.tsx
 │   │   │   ├── PinAuth.tsx
 │   │   │   ├── QRCode.tsx
+│   │   │   ├── SettingsPanel.tsx
+│   │   │   ├── TransferHistory.tsx
 │   │   │   ├── TransferProgress.tsx
+│   │   │   ├── TransferQueue.tsx
 │   │   │   └── UploadZone.tsx
 │   │   │
 │   │   ├── hooks/
@@ -120,6 +132,10 @@ lan-drop/
 │   │   │
 │   │   ├── pages/
 │   │   │   └── Dashboard.tsx
+│   │   │
+│   │   ├── utils/
+│   │   │   ├── TransferManager.ts
+│   │   │   └── encryption.ts
 │   │   │
 │   │   ├── App.tsx
 │   │   ├── main.tsx
@@ -135,8 +151,11 @@ lan-drop/
 ├── server/
 │   ├── src/
 │   │   ├── routes/
-│   │   │   └── files.js
+│   │   │   ├── config.js
+│   │   │   ├── files.js
+│   │   │   └── history.js
 │   │   │
+│   │   ├── bandwidth.js
 │   │   ├── socket.js
 │   │   └── server.js
 │   │
@@ -308,13 +327,22 @@ Large files should be streamed rather than read entirely into memory.
 GET /api/files
 ```
 
-### Upload
+### Upload (multipart)
 
 ```http
 POST /api/upload
 ```
 
 Uses multipart form data.
+
+### Chunked upload (with pause/resume)
+
+```http
+POST /api/upload/init          # Initialize upload
+POST /api/upload/chunk?uploadId=&index=  # Send chunk
+GET  /api/upload/status/:uploadId  # Check resume state
+DELETE /api/upload/cancel/:uploadId  # Cancel upload
+```
 
 ### Download
 
@@ -326,6 +354,21 @@ GET /api/download/:filename
 
 ```http
 DELETE /api/files/:filename
+```
+
+### Configuration
+
+```http
+GET  /api/config               # Get current settings
+PUT  /api/config               # Update settings (bandwidth, storage dir)
+```
+
+### Transfer history
+
+```http
+GET    /api/history            # List past transfers
+DELETE /api/history            # Clear history
+DELETE /api/history/:id        # Delete single entry
 ```
 
 ### PIN authentication
@@ -430,19 +473,17 @@ A database only becomes useful if the project later introduces persistent transf
 
 ### Future
 
-- [ ] Multi-file transfer queue
-- [ ] Pause/resume
-- [ ] Automatic device discovery
-- [ ] mDNS
-- [ ] Folder transfers
-- [ ] File previews
-- [ ] Transfer history
-- [ ] Bandwidth limiting
-- [ ] Custom storage directory
+- [x] Multi-file transfer queue
+- [x] Pause/resume
+- [x] mDNS
+- [x] Folder transfers
+- [x] File previews
+- [x] Transfer history
+- [x] Bandwidth limiting
+- [x] Custom storage directory
 - [ ] Desktop application
 - [ ] Mobile application
-- [ ] End-to-end encryption
-- [ ] WebRTC peer-to-peer mode
+- [x] End-to-end encryption
 
 ---
 

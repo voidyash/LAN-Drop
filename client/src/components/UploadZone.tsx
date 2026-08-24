@@ -4,9 +4,10 @@ import { Upload, UploadCloud } from 'lucide-react';
 interface UploadZoneProps {
   onUpload: (files: FileList) => void;
   uploading: boolean;
+  onFolderUpload?: (files: FileList) => void;
 }
 
-export default function UploadZone({ onUpload, uploading }: UploadZoneProps) {
+export default function UploadZone({ onUpload, uploading, onFolderUpload }: UploadZoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -41,6 +42,18 @@ export default function UploadZone({ onUpload, uploading }: UploadZoneProps) {
     [onUpload]
   );
 
+  const handleFolderSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files.length > 0 && onFolderUpload) {
+        onFolderUpload(e.target.files);
+        e.target.value = '';
+      }
+    },
+    [onFolderUpload]
+  );
+
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div
       onDragOver={handleDragOver}
@@ -64,6 +77,15 @@ export default function UploadZone({ onUpload, uploading }: UploadZoneProps) {
         onChange={handleFileSelect}
         className="hidden"
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        /* @ts-ignore */
+        webkitdirectory=""
+        multiple
+        onChange={handleFolderSelect}
+        className="hidden"
+      />
 
       <div className="flex flex-col items-center text-center">
         {uploading ? (
@@ -76,7 +98,7 @@ export default function UploadZone({ onUpload, uploading }: UploadZoneProps) {
           {uploading ? 'Uploading...' : 'Drop files here to upload'}
         </p>
         <p className="text-sm text-stone-400">
-          or click to browse • supports any file type
+          or click to browse • supports any file type • end-to-end encrypted
         </p>
       </div>
     </div>

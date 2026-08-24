@@ -11,9 +11,12 @@ interface FileListProps {
   files: FileItem[];
   onDelete: (name: string) => void;
   deletingFile: string | null;
+  encryptedFiles?: Set<string>;
+  onDownloadEncrypted?: (name: string) => void;
+  onPreview?: (name: string) => void;
 }
 
-export default function FileList({ files, onDelete, deletingFile }: FileListProps) {
+export default function FileList({ files, onDelete, deletingFile, encryptedFiles, onDownloadEncrypted, onPreview }: FileListProps) {
   if (files.length === 0) {
     return (
       <div className="bg-stone-800 rounded-xl p-8 border border-stone-700 text-center">
@@ -40,6 +43,9 @@ export default function FileList({ files, onDelete, deletingFile }: FileListProp
             uploadedAt={file.uploadedAt}
             onDelete={onDelete}
             deleting={deletingFile === file.name}
+            encrypted={encryptedFiles?.has(file.name) ?? false}
+            onDownloadEncrypted={onDownloadEncrypted}
+            onPreview={onPreview}
           />
         ))}
       </div>

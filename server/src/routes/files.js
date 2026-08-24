@@ -2,10 +2,17 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { throttleStream, getDownloadBandwidth } = require('../bandwidth');
+const { recordTransfer } = require('./history');
 
 const router = express.Router();
 
-const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+let uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+const chunksDir = path.join(__dirname, '..', '..', 'chunks');
+
+if (!fs.existsSync(chunksDir)) {
+  fs.mkdirSync(chunksDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -34,6 +41,36 @@ const upload = multer({
 
 let lanPin = process.env.LAN_PIN || null;
 let pinEnabled = !!lanPin;
+
+/** Update the uploads directory at runtime */
+function setUploadsDir(dir) {
+  uploadsDir = dir;
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+}
+
+/** Recursively list all files under a directory */
+function listFilesRecursive(dir, prefix = '') {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listFilesRecursive(full, rel));
+    } else {
+      const stats = fs.statSync(full);
+      results.push({
+        name: rel,
+        size: stats.size,
+        uploadedAt: stats.mtime.toISOString(),
+      });
+    }
+  }
+  return results;
+}
 
 function getLanIP() {
   const { networkInterfaces } = require('os');
@@ -81,17 +118,16 @@ router.get('/info', (_req, res) => {
   });
 });
 
+function deleteChunksDir(uploadId) {
+  const dir = path.join(chunksDir, uploadId);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 router.get('/files', (_req, res) => {
   try {
-    const files = fs.readdirSync(uploadsDir).map((filename) => {
-      const filePath = path.join(uploadsDir, filename);
-      const stats = fs.statSync(filePath);
-      return {
-        name: filename,
-        size: stats.size,
-        uploadedAt: stats.mtime.toISOString(),
-      };
-    });
+    const files = listFilesRecursive(uploadsDir);
     res.json(files);
   } catch (err) {
     res.status(500).json({ error: 'Failed to list files' });
@@ -119,6 +155,15 @@ router.post('/upload', (req, res, next) => {
       req.io.emit('upload_completed', file);
     });
   }
+
+  // Record in history
+  uploadedFiles.forEach((file) => {
+    recordTransfer({
+      type: 'upload',
+      filename: file.name,
+      size: file.size,
+    });
+  });
 
   res.json({ files: uploadedFiles });
 });
@@ -160,13 +205,27 @@ router.get('/download/:filename', (req, res) => {
   }
 
   const stat = fs.statSync(filePath);
-  const fileStream = fs.createReadStream(filePath);
+  let fileStream = fs.createReadStream(filePath);
 
   res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(filename))}"`);
   res.setHeader('Content-Length', stat.size);
 
+  // Apply bandwidth throttling
+  const dlBps = getDownloadBandwidth();
+  if (dlBps > 0) {
+    fileStream = throttleStream(fileStream, dlBps);
+  }
+
   fileStream.pipe(res);
+
+  // Record download in history
+  recordTransfer({
+    type: 'download',
+    filename: path.basename(filename),
+    folder: path.dirname(filename) !== '.' ? path.dirname(filename) : undefined,
+    size: stat.size,
+  });
 });
 
 router.delete('/files/:filename', (req, res) => {
@@ -182,14 +241,179 @@ router.delete('/files/:filename', (req, res) => {
   }
 
   try {
+    const stats = fs.statSync(filePath);
     fs.unlinkSync(filePath);
     if (req.io) {
       req.io.emit('file_deleted', { name: filename });
     }
+    recordTransfer({
+      type: 'delete',
+      filename: path.basename(filename),
+      folder: path.dirname(filename) !== '.' ? path.dirname(filename) : undefined,
+      size: stats.size,
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete file' });
   }
+});
+
+router.post('/upload/init', (req, res) => {
+  const { uploadId, filename, totalChunks, fileSize, encrypted, folder } = req.body;
+
+  if (!uploadId || !filename || !totalChunks || !fileSize) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Sanitize uploadId to prevent path traversal
+  const safeUploadId = path.basename(String(uploadId));
+
+  // Check if file already fully uploaded
+  const finalPath = path.join(uploadsDir, filename);
+  if (fs.existsSync(finalPath)) {
+    return res.status(409).json({ error: 'File already exists', completed: true });
+  }
+
+  const uploadDir = path.join(chunksDir, safeUploadId);
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  // Write metadata
+  fs.writeFileSync(path.join(uploadDir, 'meta.json'), JSON.stringify({
+    filename,
+    totalChunks,
+    fileSize,
+    encrypted: !!encrypted,
+    folder: folder || '',
+    startedAt: new Date().toISOString(),
+  }));
+
+  res.json({ success: true, uploadId: safeUploadId });
+});
+
+router.post('/upload/chunk', express.raw({ type: 'application/octet-stream', limit: '2mb' }), (req, res) => {
+  const uploadId = String(req.query.uploadId || '');
+  const index = parseInt(req.query.index, 10);
+  const safeUploadId = path.basename(uploadId);
+
+  if (!safeUploadId || isNaN(index) || index < 0) {
+    return res.status(400).json({ error: 'Invalid uploadId or index' });
+  }
+
+  const uploadDir = path.join(chunksDir, safeUploadId);
+  if (!fs.existsSync(uploadDir)) {
+    return res.status(404).json({ error: 'Upload not found. Re-init upload.' });
+  }
+
+  const chunkFile = path.join(uploadDir, `chunk_${String(index).padStart(6, '0')}`);
+  fs.writeFileSync(chunkFile, req.body);
+
+  // Read metadata
+  const metaPath = path.join(uploadDir, 'meta.json');
+  if (!fs.existsSync(metaPath)) {
+    return res.status(500).json({ error: 'Upload metadata missing' });
+  }
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+  // Check if all chunks received
+  const receivedChunks = fs.readdirSync(uploadDir).filter(f => f.startsWith('chunk_'));
+
+  if (receivedChunks.length >= meta.totalChunks) {
+    // Assemble file — create subfolder if needed
+    const targetDir = meta.folder ? path.join(uploadsDir, meta.folder) : uploadsDir;
+    if (meta.folder && !fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const finalName = meta.folder ? path.join(meta.folder, meta.filename) : meta.filename;
+    const finalPath = path.join(uploadsDir, finalName);
+    const writeStream = fs.createWriteStream(finalPath);
+
+    return new Promise((resolve, reject) => {
+      let i = 0;
+      function writeNext() {
+        if (i >= receivedChunks.length) {
+          writeStream.end(() => {
+            // Cleanup chunks
+            deleteChunksDir(safeUploadId);
+
+            // Emit socket events
+            if (req.io) {
+              req.io.emit('upload_completed', {
+                name: finalName,
+                size: meta.fileSize,
+                encrypted: meta.encrypted,
+                uploadedAt: new Date().toISOString(),
+              });
+            }
+
+            // Record upload in history
+            recordTransfer({
+              type: 'upload',
+              filename: meta.filename,
+              folder: meta.folder || undefined,
+              size: meta.fileSize,
+            });
+
+            res.json({ status: 'completed', name: finalName });
+            resolve();
+          });
+          return;
+        }
+        const chunkPath = path.join(uploadDir, receivedChunks[i]);
+        const chunkData = fs.readFileSync(chunkPath);
+        i++;
+        if (!writeStream.write(chunkData)) {
+          writeStream.once('drain', writeNext);
+        } else {
+          writeNext();
+        }
+      }
+      writeNext();
+    }).catch((err) => {
+      console.error('Assembly error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'File assembly failed' });
+      }
+    });
+  }
+
+  res.json({
+    status: 'chunk_received',
+    received: receivedChunks.length,
+    total: meta.totalChunks,
+  });
+});
+
+router.get('/upload/status/:uploadId', (req, res) => {
+  const safeUploadId = path.basename(String(req.params.uploadId));
+  const uploadDir = path.join(chunksDir, safeUploadId);
+
+  if (!fs.existsSync(uploadDir)) {
+    return res.status(404).json({ error: 'Upload not found' });
+  }
+
+  const metaPath = path.join(uploadDir, 'meta.json');
+  if (!fs.existsSync(metaPath)) {
+    return res.status(500).json({ error: 'Upload metadata missing' });
+  }
+
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  const receivedChunks = fs.readdirSync(uploadDir).filter(f => f.startsWith('chunk_'));
+
+  res.json({
+    receivedChunks: receivedChunks.length,
+    totalChunks: meta.totalChunks,
+    filename: meta.filename,
+    fileSize: meta.fileSize,
+    encrypted: meta.encrypted,
+  });
+});
+
+router.delete('/upload/cancel/:uploadId', (req, res) => {
+  const safeUploadId = path.basename(String(req.params.uploadId));
+  deleteChunksDir(safeUploadId);
+  res.json({ success: true });
 });
 
 router.post('/auth/pin', (req, res) => {

@@ -1,9 +1,15 @@
+import { Pause, Play, XCircle } from 'lucide-react';
+
 interface TransferProgressProps {
   fileName: string;
   progress: number;
   bytesUploaded: number;
   totalBytes: number;
   speed: number;
+  status?: string;
+  onPause?: () => void;
+  onResume?: () => void;
+  onCancel?: () => void;
 }
 
 function formatSize(bytes: number): string {
@@ -23,6 +29,10 @@ export default function TransferProgress({
   bytesUploaded,
   totalBytes,
   speed,
+  status,
+  onPause,
+  onResume,
+  onCancel,
 }: TransferProgressProps) {
   return (
     <div className="bg-stone-800 rounded-xl p-4 border border-stone-700">
@@ -42,7 +52,36 @@ export default function TransferProgress({
         <span>
           {formatSize(bytesUploaded)} / {formatSize(totalBytes)}
         </span>
-        <span>{formatSpeed(speed)}</span>
+        <div className="flex items-center gap-2">
+          <span>{formatSpeed(speed)}</span>
+          {status === 'paused' && onResume && (
+            <button
+              onClick={onResume}
+              className="p-1 rounded hover:bg-accent-600/20 text-accent-400 transition-colors"
+              title="Resume"
+            >
+              <Play className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {status === 'uploading' && onPause && (
+            <button
+              onClick={onPause}
+              className="p-1 rounded hover:bg-stone-600 text-stone-400 transition-colors"
+              title="Pause"
+            >
+              <Pause className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="p-1 rounded hover:bg-red-600/20 text-stone-400 hover:text-red-400 transition-colors"
+              title="Cancel"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

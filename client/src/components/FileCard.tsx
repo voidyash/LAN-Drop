@@ -6,6 +6,9 @@ interface FileCardProps {
   uploadedAt: string;
   onDelete: (name: string) => void;
   deleting: boolean;
+  encrypted?: boolean;
+  onDownloadEncrypted?: (name: string) => void;
+  onPreview?: (name: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -39,8 +42,12 @@ function formatTime(dateStr: string): string {
   });
 }
 
-export default function FileCard({ name, size, uploadedAt, onDelete, deleting }: FileCardProps) {
+export default function FileCard({ name, size, uploadedAt, onDelete, deleting, encrypted, onDownloadEncrypted, onPreview }: FileCardProps) {
   const handleDownload = () => {
+    if (encrypted && onDownloadEncrypted) {
+      onDownloadEncrypted(name);
+      return;
+    }
     const link = document.createElement('a');
     link.href = `/api/download/${encodeURIComponent(name)}`;
     link.download = name;
@@ -50,9 +57,13 @@ export default function FileCard({ name, size, uploadedAt, onDelete, deleting }:
   return (
     <div className="bg-stone-800 rounded-xl p-4 border border-stone-700 hover:border-stone-600 transition-colors">
       <div className="flex items-start gap-3">
-        <div className="p-2 bg-stone-700 rounded-lg flex-shrink-0">
+        <button
+          onClick={() => onPreview?.(name)}
+          className="p-2 bg-stone-700 rounded-lg flex-shrink-0 hover:bg-stone-600 transition-colors cursor-pointer"
+          title="Preview"
+        >
           {getFileIcon(name)}
-        </div>
+        </button>
 
         <div className="flex-1 min-w-0">
           <h3 className="font-medium truncate" title={name}>
